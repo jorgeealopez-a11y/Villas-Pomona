@@ -156,6 +156,49 @@ tr:hover td{background:var(--azul-bg);}
 </style>
 </head>
 <body>
+<!-- Firebase SDK -->
+<script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+  import { getFirestore, doc, getDoc, setDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+
+  const firebaseConfig = {
+    apiKey: "AIzaSyAyy5aKC3lXYWllxtuEC9Xzw9m-q4uMF3w",
+    authDomain: "villas-pomona.firebaseapp.com",
+    projectId: "villas-pomona",
+    storageBucket: "villas-pomona.firebasestorage.app",
+    messagingSenderId: "42226530915",
+    appId: "1:42226530915:web:d2b2a9bf2852dd1c889656"
+  };
+
+  const app = initializeApp(firebaseConfig);
+  const db = getFirestore(app);
+
+  // Expose to global scope for use in main script
+  window._fbDb = db;
+  window._fbDoc = doc;
+  window._fbGetDoc = getDoc;
+  window._fbSetDoc = setDoc;
+  window._fbOnSnapshot = onSnapshot;
+  window._fbReady = true;
+
+  // Listen for real-time changes
+  const docRef = doc(db, "condominio", "lecturas");
+  onSnapshot(docRef, (snapshot) => {
+    if (snapshot.exists()) {
+      const data = snapshot.data();
+      if (data.extra_lecturas) {
+        try {
+          window.EXTRA_LECTURAS = JSON.parse(data.extra_lecturas);
+          // Trigger rebuild if app is ready
+          if (window._appReady) {
+            window.rebuildAll();
+          }
+        } catch(e) { console.error("Firebase parse error:", e); }
+      }
+    }
+  });
+</script>
+
 <div class="header">
   <h1>&#127968; Villas Pomona</h1>
   <p>Reporte de Consumo de Agua</p>
@@ -376,13 +419,49 @@ var LS_KEY = "villasPomona_lecturas";
 var EXTRA_LECTURAS = {};
 
 function lsLoad(){
+  // Try localStorage as fallback
   try{
     var raw = localStorage.getItem(LS_KEY);
     if(raw) EXTRA_LECTURAS = JSON.parse(raw);
   } catch(e){ EXTRA_LECTURAS = {}; }
 }
 function lsSave(){
+  // Save to localStorage as backup
   try{ localStorage.setItem(LS_KEY, JSON.stringify(EXTRA_LECTURAS)); } catch(e){}
+  // Save to Firebase
+  fbSave();
+}
+function fbSave(){
+  try{
+    if(!window._fbReady) return;
+    var docRef = window._fbDoc(window._fbDb, "condominio", "lecturas");
+    window._fbSetDoc(docRef, {
+      extra_lecturas: JSON.stringify(EXTRA_LECTURAS),
+      updated_at: new Date().toISOString()
+    }).then(function(){
+      console.log("Firebase guardado OK");
+    }).catch(function(e){
+      console.error("Firebase save error:", e);
+    });
+  } catch(e){ console.error("fbSave error:", e); }
+}
+function fbLoad(){
+  try{
+    if(!window._fbReady) return;
+    var docRef = window._fbDoc(window._fbDb, "condominio", "lecturas");
+    window._fbGetDoc(docRef).then(function(snap){
+      if(snap.exists()){
+        var data = snap.data();
+        if(data.extra_lecturas){
+          EXTRA_LECTURAS = JSON.parse(data.extra_lecturas);
+          // Also update localStorage
+          try{ localStorage.setItem(LS_KEY, data.extra_lecturas); }catch(e){}
+          rebuildAll();
+          renderHistory();
+        }
+      }
+    }).catch(function(e){ console.error("fbLoad error:", e); });
+  } catch(e){ console.error("fbLoad error:", e); }
 }
 lsLoad();
 
@@ -957,7 +1036,12 @@ window.addEventListener("load", function(){
   document.getElementById("ing-mes").value="5";
   buildIngGrid();
   renderHistory();
-  setTimeout(function(){ buildSection("general"); }, 500);
+  setTimeout(function(){
+    buildSection("general");
+    window._appReady = true;
+    // Load latest data from Firebase
+    setTimeout(function(){ fbLoad(); }, 800);
+  }, 500);
 });
 window.addEventListener("resize", function(){
   clearTimeout(window._rt);
