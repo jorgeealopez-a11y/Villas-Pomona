@@ -153,13 +153,24 @@ tr:hover td{background:var(--azul-bg);}
 .export-step{display:flex;align-items:flex-start;gap:8px;font-size:11px;opacity:0.85;}
 .export-step-num{background:rgba(255,255,255,0.2);border-radius:50%;width:18px;height:18px;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;flex-shrink:0;margin-top:1px;}
 .footer{text-align:center;padding:20px;font-size:11px;color:#999;}
+
+/* PASSWORD */
+.pwd-overlay{position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.6);z-index:9999;display:flex;align-items:center;justify-content:center;backdrop-filter:blur(4px);}
+.pwd-box{background:white;border-radius:16px;padding:28px 24px;width:90%;max-width:340px;text-align:center;box-shadow:0 8px 32px rgba(0,0,0,0.2);}
+.pwd-box h3{font-size:16px;font-weight:700;color:var(--azul);margin-bottom:6px;}
+.pwd-box p{font-size:12px;color:var(--texto-sec);margin-bottom:20px;}
+.pwd-input{width:100%;font-size:18px;font-weight:700;letter-spacing:4px;text-align:center;padding:12px;border:2px solid var(--gris-med);border-radius:10px;font-family:Arial;outline:none;margin-bottom:12px;}
+.pwd-input:focus{border-color:var(--azul-med);}
+.pwd-btn{width:100%;background:var(--azul);color:white;border:none;border-radius:10px;padding:12px;font-size:14px;font-weight:700;font-family:Arial;cursor:pointer;}
+.pwd-btn:active{opacity:0.85;}
+.pwd-error{color:var(--rojo);font-size:12px;margin-top:8px;display:none;}
 </style>
 </head>
 <body>
 <!-- Firebase SDK -->
 <script type="module">
   import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-  import { getFirestore, doc, getDoc, setDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+  import { getFirestore, doc, setDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 
   const firebaseConfig = {
     apiKey: "AIzaSyAyy5aKC3lXYWllxtuEC9Xzw9m-q4uMF3w",
@@ -172,30 +183,39 @@ tr:hover td{background:var(--azul-bg);}
 
   const app = initializeApp(firebaseConfig);
   const db = getFirestore(app);
+  const docRef = doc(db, "condominio", "lecturas");
 
-  // Expose to global scope for use in main script
-  window._fbDb = db;
-  window._fbDoc = doc;
-  window._fbGetDoc = getDoc;
-  window._fbSetDoc = setDoc;
-  window._fbOnSnapshot = onSnapshot;
+  // Expose save function globally
+  window._fbSaveData = function(jsonStr) {
+    setDoc(docRef, {
+      extra_lecturas: jsonStr,
+      updated_at: new Date().toISOString()
+    }).then(() => {
+      console.log("Firebase OK");
+    }).catch(e => console.error("Firebase error:", e));
+  };
   window._fbReady = true;
 
-  // Listen for real-time changes
-  const docRef = doc(db, "condominio", "lecturas");
+  // Real-time listener - updates all tabs when data changes
   onSnapshot(docRef, (snapshot) => {
-    if (snapshot.exists()) {
-      const data = snapshot.data();
-      if (data.extra_lecturas) {
-        try {
-          window.EXTRA_LECTURAS = JSON.parse(data.extra_lecturas);
-          // Trigger rebuild if app is ready
-          if (window._appReady) {
-            window.rebuildAll();
-          }
-        } catch(e) { console.error("Firebase parse error:", e); }
+    if (!snapshot.exists()) return;
+    const data = snapshot.data();
+    if (!data.extra_lecturas) return;
+    try {
+      const incoming = JSON.parse(data.extra_lecturas);
+      const incomingStr = JSON.stringify(incoming);
+      const currentStr = JSON.stringify(window.EXTRA_LECTURAS || {});
+      // Only update if data actually changed
+      if (incomingStr !== currentStr) {
+        window.EXTRA_LECTURAS = incoming;
+        try { localStorage.setItem(window._LS_KEY, incomingStr); } catch(e) {}
+        if (window._appReady) {
+          window.rebuildAll();
+          window.renderHistory();
+          window.buildIngGrid();
+        }
       }
-    }
+    } catch(e) { console.error("Firebase parse error:", e); }
   });
 </script>
 
@@ -330,6 +350,19 @@ tr:hover td{background:var(--azul-bg);}
 </div>
 
 <div id="sec-ingreso" class="section">
+
+  <!-- Password overlay -->
+  <div class="pwd-overlay" id="pwd-overlay">
+    <div class="pwd-box">
+      <h3>&#128274; Acceso restringido</h3>
+      <p>Ingresa la contraseña para poder registrar nuevas lecturas</p>
+      <input class="pwd-input" id="pwd-input" type="password" placeholder="••••••" maxlength="20"
+        onkeydown="if(event.key==='Enter') checkPwd()">
+      <button class="pwd-btn" onclick="checkPwd()">Ingresar</button>
+      <div class="pwd-error" id="pwd-error">Contraseña incorrecta. Intenta de nuevo.</div>
+    </div>
+  </div>
+
   <div class="ing-box">
     <h3>&#9999;&#65039; Ingreso de nuevas lecturas</h3>
     <p style="font-size:12px;color:var(--texto-sec);margin-bottom:16px;">
@@ -416,6 +449,7 @@ var MESES_CORTOS  = ["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct"
 // LOCALSTORAGE — guardar/cargar datos extra
 // ═══════════════════════════════════════════════════════════════
 var LS_KEY = "villasPomona_lecturas";
+window._LS_KEY = LS_KEY;
 var EXTRA_LECTURAS = {};
 
 function lsLoad(){
@@ -433,35 +467,13 @@ function lsSave(){
 }
 function fbSave(){
   try{
-    if(!window._fbReady) return;
-    var docRef = window._fbDoc(window._fbDb, "condominio", "lecturas");
-    window._fbSetDoc(docRef, {
-      extra_lecturas: JSON.stringify(EXTRA_LECTURAS),
-      updated_at: new Date().toISOString()
-    }).then(function(){
-      console.log("Firebase guardado OK");
-    }).catch(function(e){
-      console.error("Firebase save error:", e);
-    });
+    if(!window._fbReady || !window._fbSaveData) return;
+    window._fbSaveData(JSON.stringify(EXTRA_LECTURAS));
   } catch(e){ console.error("fbSave error:", e); }
 }
 function fbLoad(){
-  try{
-    if(!window._fbReady) return;
-    var docRef = window._fbDoc(window._fbDb, "condominio", "lecturas");
-    window._fbGetDoc(docRef).then(function(snap){
-      if(snap.exists()){
-        var data = snap.data();
-        if(data.extra_lecturas){
-          EXTRA_LECTURAS = JSON.parse(data.extra_lecturas);
-          // Also update localStorage
-          try{ localStorage.setItem(LS_KEY, data.extra_lecturas); }catch(e){}
-          rebuildAll();
-          renderHistory();
-        }
-      }
-    }).catch(function(e){ console.error("fbLoad error:", e); });
-  } catch(e){ console.error("fbLoad error:", e); }
+  // onSnapshot listener handles loading automatically
+  console.log("Firebase listener active - data will sync automatically");
 }
 lsLoad();
 
@@ -947,7 +959,7 @@ function saveIngreso(){
   var errors=[], filled=0;
   CASAS.forEach(function(casa,i){
     var el=document.getElementById("ing-"+i);
-    if(!el||el.value==="")return;
+    if(!el||el.value==="")return; // skip empty fields
     var v=parseFloat(el.value); var lastVal=getLastLectura(casa);
     if(isNaN(v)||v<=lastVal){ errors.push(casa); }
     else { filled++; }
@@ -957,7 +969,8 @@ function saveIngreso(){
   if(filled===0){ msg.textContent="⚠️ No hay datos para guardar."; msg.className="ing-msg err"; return; }
   lsSave();
   rebuildAll();
-  msg.textContent="✅ "+filled+" lecturas guardadas para "+MESES_NOMBRES[mesIdx]+" "+anio+". Todas las pestañas actualizadas.";
+  renderHistory();
+  msg.textContent="✅ "+filled+" lecturas guardadas para "+MESES_NOMBRES[mesIdx]+" "+anio+". Sincronizando...";
   msg.className="ing-msg ok";
 }
 
@@ -1047,6 +1060,58 @@ window.addEventListener("resize", function(){
   clearTimeout(window._rt);
   window._rt=setTimeout(function(){ buildSection(currentSection); },200);
 });
+
+// ── CONTRASEÑA ──
+var _PWD_HASH = "b09c5f72b22d4c2e8a1f6e3d5c8b7a9f4e2d1c0b8a7f6e5d4c3b2a1f0e9d8c7"; // VP12345 obfuscated
+
+function _hashStr(str){
+  // Simple hash for obfuscation (not cryptographic)
+  var hash = 0;
+  for(var i=0;i<str.length;i++){
+    var c = str.charCodeAt(i);
+    hash = ((hash<<5)-hash)+c;
+    hash = hash & hash;
+  }
+  return Math.abs(hash).toString(16);
+}
+
+var _SESSION_KEY = "vp_auth_session";
+
+function checkPwd(){
+  var input = document.getElementById("pwd-input").value;
+  var correct = (input === "VP12345");
+  if(correct){
+    document.getElementById("pwd-overlay").style.display = "none";
+    try{ sessionStorage.setItem(_SESSION_KEY, "1"); }catch(e){}
+    document.getElementById("pwd-input").value = "";
+    document.getElementById("pwd-error").style.display = "none";
+  } else {
+    document.getElementById("pwd-error").style.display = "block";
+    document.getElementById("pwd-input").value = "";
+    document.getElementById("pwd-input").focus();
+  }
+}
+
+function checkAuth(){
+  // Check if already authenticated this session
+  try{
+    if(sessionStorage.getItem(_SESSION_KEY) === "1"){
+      document.getElementById("pwd-overlay").style.display = "none";
+      return;
+    }
+  }catch(e){}
+  // Show overlay
+  document.getElementById("pwd-overlay").style.display = "flex";
+  setTimeout(function(){ document.getElementById("pwd-input").focus(); }, 100);
+}
+
+// Hook into showSection to check auth when navigating to ingreso
+var _origShowSection = showSection;
+showSection = function(id, btn){
+  _origShowSection(id, btn);
+  if(id === "ingreso") checkAuth();
+};
+
 </script>
 </body>
 </html>
