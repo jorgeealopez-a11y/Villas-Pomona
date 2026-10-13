@@ -548,14 +548,17 @@ function makeChart(id,config){
     if(charts[id]){ try{charts[id].destroy();}catch(e){} }
     var c=document.getElementById(id); if(!c)return;
     var ht=parseInt(c.getAttribute("height"))||260;
-    var wd=c.parentElement.offsetWidth||window.innerWidth||360;
+    var wd=c.parentElement.offsetWidth||c.offsetWidth||window.innerWidth-40||600;
+    if(wd < 10) wd = 600; // fallback for hidden elements
     c.width=wd; c.height=ht;
     c.style.width=wd+"px"; c.style.height=ht+"px";
     c.parentElement.style.height=ht+"px";
     config.options=config.options||{};
-    config.options.responsive=false;
+    config.options.responsive=true;
     config.options.maintainAspectRatio=false;
     charts[id]=new Chart(c.getContext("2d"),config);
+    // Resize after a tick to ensure proper dimensions
+    setTimeout(function(){ try{ if(charts[id]) charts[id].resize(); }catch(e){} }, 100);
   }catch(e){ console.error("makeChart ["+id+"]: "+e.message); }
 }
 
@@ -1035,12 +1038,20 @@ window.addEventListener("load", function(){
   document.getElementById("ing-mes").value="5";
   buildIngGrid();
   renderHistory();
+  // Build immediately without waiting for Firebase
   setTimeout(function(){
-    buildSection("general");
-    window._appReady = true;
-    // Load latest data from Firebase
-    setTimeout(function(){ fbLoad(); }, 800);
-  }, 500);
+    try {
+      buildSection("general");
+      window._appReady = true;
+    } catch(e) {
+      console.error("Init error:", e);
+      // Force update header even if chart fails
+      try {
+        var allM = getAllMeses();
+        document.getElementById("header-periodo").textContent = allM[1] + " - " + allM[allM.length-1];
+      } catch(e2) {}
+    }
+  }, 200);
 });
 window.addEventListener("resize", function(){
   clearTimeout(window._rt);
